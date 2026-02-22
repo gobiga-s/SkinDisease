@@ -192,7 +192,7 @@ function displayImageResult(result, imageData) {
         html += '<h6 class="mt-3 mb-2">All Predictions:</h6>';
         const sortedPredictions = Object.entries(result.all_predictions)
             .sort((a, b) => b[1] - a[1])
-            .slice(0, 5); // Top 5 predictions
+            .slice(0, 3); // Top 3 predictions
         
         sortedPredictions.forEach(([disease, confidence]) => {
             const confidencePercent = (confidence * 100).toFixed(1);
