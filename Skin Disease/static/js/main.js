@@ -169,6 +169,24 @@ async function analyzeImage() {
 }
 
 // Display image analysis result
+
+function renderSafetyNotice(safety) {
+    if (!safety) return '';
+
+    let badge = '';
+    if (safety.is_high_risk) {
+        badge = '<span class="badge bg-danger ms-2">High Risk</span>';
+    } else if (safety.is_low_confidence) {
+        badge = '<span class="badge bg-warning text-dark ms-2">Low Confidence</span>';
+    }
+
+    const message = safety.recommendation ? `<p class="mb-0 mt-2 text-danger"><strong>Recommendation:</strong> ${safety.recommendation}</p>` : '';
+    return `<div class="alert alert-light border mt-2">
+        <small><strong>Important:</strong> This output is not a medical diagnosis.${badge}</small>
+        ${message}
+    </div>`;
+}
+
 function displayImageResult(result, imageData) {
     const resultDiv = document.getElementById('imageResult');
     const contentDiv = document.getElementById('imagePredictionContent');
@@ -192,7 +210,7 @@ function displayImageResult(result, imageData) {
         html += '<h6 class="mt-3 mb-2">All Predictions:</h6>';
         const sortedPredictions = Object.entries(result.all_predictions)
             .sort((a, b) => b[1] - a[1])
-            .slice(0, 5); // Top 5 predictions
+            .slice(0, 3); // Top 3 predictions
         
         sortedPredictions.forEach(([disease, confidence]) => {
             const confidencePercent = (confidence * 100).toFixed(1);
@@ -205,6 +223,7 @@ function displayImageResult(result, imageData) {
         });
     }
 
+    html += renderSafetyNotice(result.safety);
     contentDiv.innerHTML = html;
     resultDiv.style.display = 'block';
     resultDiv.classList.add('fade-in');
@@ -260,7 +279,7 @@ function displayTextResult(result) {
     const resultDiv = document.getElementById('textResult');
     const contentDiv = document.getElementById('textPredictionContent');
     
-    const html = `
+    let html = `
         <div class="mb-3">
             <h5 class="text-info">
                 <i class="fas fa-brain me-2"></i>
@@ -277,6 +296,7 @@ function displayTextResult(result) {
         </div>
     `;
 
+    html += renderSafetyNotice(result.safety);
     contentDiv.innerHTML = html;
     resultDiv.style.display = 'block';
     resultDiv.classList.add('fade-in');

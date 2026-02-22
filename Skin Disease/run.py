@@ -22,16 +22,22 @@ def setup_logging(log_level='INFO'):
 
 def check_dependencies():
     """Check if all required dependencies are installed"""
-    required_packages = [
-        'tensorflow', 'torch', 'transformers', 'flask', 
-        'opencv-python', 'scipy', 'numpy', 'pandas'
-    ]
+    required_packages = {
+        'tensorflow': 'tensorflow',
+        'torch': 'torch',
+        'transformers': 'transformers',
+        'flask': 'flask',
+        'opencv-python': 'cv2',
+        'scipy': 'scipy',
+        'numpy': 'numpy',
+        'pandas': 'pandas'
+    }
     
     missing_packages = []
     
-    for package in required_packages:
+    for package, module_name in required_packages.items():
         try:
-            __import__(package.replace('-', '_'))
+            __import__(module_name)
         except ImportError:
             missing_packages.append(package)
     
@@ -56,11 +62,11 @@ def check_model_files():
     
     if not os.path.exists(efficientnet_model):
         print(f"⚠️  EfficientNet model not found at {efficientnet_model}")
-        print("   The application will run with dummy predictions")
+        print("   Predictions will be unavailable until a trained checkpoint is provided")
     
     if not os.path.exists(biobert_model):
         print(f"⚠️  BioBERT model not found at {biobert_model}")
-        print("   The application will run with dummy predictions")
+        print("   Predictions will be unavailable until a trained checkpoint is provided")
 
 def create_directories():
     """Create necessary directories"""
