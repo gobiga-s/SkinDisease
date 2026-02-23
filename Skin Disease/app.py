@@ -7,8 +7,6 @@ from typing import Optional, Tuple
 import numpy as np
 import tensorflow as tf
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
-import cv2
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
@@ -33,7 +31,12 @@ class SkinDiseasePredictor:
         self.image_model = None
         self.text_model = None
         self.tokenizer = None
-        self.load_models()
+        self.torch = None
+        self.cv2 = None
+        self.enable_text_model = os.getenv('ENABLE_TEXT_MODEL', '0') == '1'
+        self.torch_available = False
+        self.cv2_available = self._init_cv2()
+        self.models_loaded = False
 
     @property
     def image_model_loaded(self):
@@ -43,7 +46,31 @@ class SkinDiseasePredictor:
     def text_model_loaded(self):
         return self.text_model is not None and self.tokenizer is not None
 
+    def _init_torch(self):
+        if self.torch is not None:
+            return True
+        try:
+            import torch as torch_module
+            self.torch = torch_module
+            return True
+        except Exception as exc:
+            logger.warning('Torch unavailable; text model inference disabled: %s', exc)
+            self.torch = None
+            return False
+
+    def _init_cv2(self):
+        try:
+            import cv2 as cv2_module
+            self.cv2 = cv2_module
+            return True
+        except Exception as exc:
+            logger.warning('OpenCV unavailable; using basic preprocessing fallback: %s', exc)
+            self.cv2 = None
+            return False
+
     def load_models(self):
+        if self.models_loaded:
+            return
         image_model_path = os.getenv('EFFICIENTNET_MODEL_PATH', 'models/efficientnet_skin_classifier.h5')
         text_model_path = os.getenv('BIOMODEL_PATH', 'models/biobert_skin_classifier')
 
@@ -57,6 +84,21 @@ class SkinDiseasePredictor:
             logger.exception('Failed to load image model: %s', exc)
             self.image_model = None
 
+        if not self.enable_text_model:
+            logger.info('Text model loading disabled (set ENABLE_TEXT_MODEL=1 to enable)')
+            self.text_model = None
+            self.tokenizer = None
+            self.torch_available = False
+            self.models_loaded = True
+            return
+
+        self.torch_available = self._init_torch()
+        if not self.torch_available:
+            self.text_model = None
+            self.tokenizer = None
+            self.models_loaded = True
+            return
+
         try:
             if os.path.exists(text_model_path):
                 self.tokenizer = AutoTokenizer.from_pretrained(text_model_path)
@@ -69,34 +111,51 @@ class SkinDiseasePredictor:
             self.text_model = None
             self.tokenizer = None
 
+        self.models_loaded = True
+
     def preprocess_image(self, image_path: str) -> Optional[np.ndarray]:
         try:
-            image = cv2.imread(image_path)
+            if not self.cv2_available:
+                return self.preprocess_image_fallback(image_path)
+
+            image = self.cv2.imread(image_path)
             if image is None:
                 return None
 
-            filtered = cv2.GaussianBlur(image, (5, 5), 0)
+            filtered = self.cv2.GaussianBlur(image, (5, 5), 0)
             mask = np.zeros(filtered.shape[:2], np.uint8)
             bgd_model = np.zeros((1, 65), np.float64)
             fgd_model = np.zeros((1, 65), np.float64)
 
             h, w = filtered.shape[:2]
             if h < 20 or w < 20:
-                segmented = cv2.resize(filtered, (300, 300))
+                segmented = self.cv2.resize(filtered, (300, 300))
                 return segmented / 255.0
 
             rect = (10, 10, w - 20, h - 20)
-            cv2.grabCut(filtered, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
+            self.cv2.grabCut(filtered, mask, rect, bgd_model, fgd_model, 5, self.cv2.GC_INIT_WITH_RECT)
 
             mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
             segmented = filtered * mask2[:, :, np.newaxis]
-            segmented = cv2.resize(segmented, (300, 300))
+            segmented = self.cv2.resize(segmented, (300, 300))
             return segmented / 255.0
         except Exception as exc:
             logger.exception('Error preprocessing image: %s', exc)
             return None
 
+
+    def preprocess_image_fallback(self, image_path: str) -> Optional[np.ndarray]:
+        try:
+            image = tf.keras.utils.load_img(image_path, target_size=(300, 300))
+            arr = tf.keras.utils.img_to_array(image) / 255.0
+            return arr
+        except Exception as exc:
+            logger.exception('Fallback image preprocessing failed: %s', exc)
+            return None
+
     def predict_image(self, image_path: str) -> Tuple[Optional[dict], Optional[str]]:
+        self.load_models()
+
         if not self.image_model_loaded:
             return None, 'Image model is unavailable. Please contact administrator.'
 
@@ -119,6 +178,8 @@ class SkinDiseasePredictor:
         }, None
 
     def predict_text(self, symptoms_text: str) -> Tuple[Optional[dict], Optional[str]]:
+        self.load_models()
+
         if not self.text_model_loaded:
             return None, 'Text model is unavailable. Please contact administrator.'
 
@@ -130,11 +191,11 @@ class SkinDiseasePredictor:
             max_length=512,
         )
 
-        with torch.no_grad():
+        with self.torch.no_grad():
             outputs = self.text_model(**inputs)
-            predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
-            predicted_class = torch.argmax(predictions, dim=-1).item()
-            confidence = float(torch.max(predictions, dim=-1)[0])
+            predictions = self.torch.nn.functional.softmax(outputs.logits, dim=-1)
+            predicted_class = self.torch.argmax(predictions, dim=-1).item()
+            confidence = float(self.torch.max(predictions, dim=-1)[0])
 
         return {
             'disease': SKIN_DISEASE_CATEGORIES[predicted_class],
@@ -244,6 +305,9 @@ def health_check():
             'status': 'healthy',
             'image_model_loaded': predictor.image_model_loaded,
             'text_model_loaded': predictor.text_model_loaded,
+            'torch_available': predictor.torch_available,
+            'text_model_enabled': predictor.enable_text_model,
+            'cv2_available': predictor.cv2_available,
             'low_confidence_threshold': app.config['LOW_CONFIDENCE_THRESHOLD'],
         }
     )
